@@ -1,0 +1,43 @@
+# Disposable 1-server / 1-client Nomad cluster for reproducing the
+# /v1/jobs/statuses missing-jobs bug (hashicorp/nomad#28132).
+#
+# The nomad binary under test is bind-mounted from ./nomad-bin — run.sh copies
+# whatever binary you point it at into that path before bringing the stack up.
+name: nomad-statuses-repro
+
+services:
+  server:
+    image: alpine:3.20
+    container_name: nsr-server
+    hostname: server
+    command: ["/nomad", "agent", "-config=/etc/nomad/server.hcl"]
+    volumes:
+      - ./nomad-bin:/nomad:ro
+      - ./conf/server.hcl:/etc/nomad/server.hcl:ro
+      - server-data:/data
+    ports:
+      - "${HOST_PORT:-4646}:4646"
+    networks: [net]
+
+  client:
+    image: alpine:3.20
+    container_name: nsr-client
+    hostname: client
+    command: ["/bin/sh", "/client-entry.sh"]
+    privileged: true
+    cgroup: private
+    volumes:
+      - ./nomad-bin:/nomad:ro
+      - ./conf/client.hcl:/etc/nomad/client.hcl:ro
+      - ./conf/client-entry.sh:/client-entry.sh:ro
+      - ./conf/synced-sleep.sh:/synced-sleep.sh:ro
+      - client-data:/data
+    networks: [net]
+    depends_on: [server]
+
+networks:
+  net:
+
+volumes:
+  server-data:
+  client-data:
