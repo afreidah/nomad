@@ -22,6 +22,9 @@
 # compares /v1/jobs (authoritative, the CLI/topology list) against
 # /v1/jobs/statuses (what the web UI jobs page uses).
 #
+# It then pages through /v1/jobs/statuses with the next_token cursor (like the
+# UI) and lists any jobs that get duplicated or never returned across the walk.
+#
 set -u
 
 # ---------------------------------------------------------------------------
@@ -79,7 +82,16 @@ dropped()       { comm -23 \
                     <(q "v1/jobs?$NS"                       | jq -r '.[].ID' | sort) \
                     <(q "v1/jobs/statuses?$NS&per_page=1000" | jq -r '.[].ID' | sort); }
 
-cleanup_jobs_dir() { rm -rf "$HERE/jobs"; }
+# --- pagination probe: fetch one page of /v1/jobs/statuses ------------------
+PG_BODY="$HERE/.pg_body"; PG_HDR="$HERE/.pg_hdr"; PG_IDS="$HERE/.pg_ids"
+fetch_page() {  # per_page  next_token  -> body in $PG_BODY, next cursor in PG_NEXT
+  local url="$ADDR/v1/jobs/statuses?$NS&per_page=$1"
+  [ -n "$2" ] && url="$url&next_token=$2"
+  curl -s -m 5 -D "$PG_HDR" -o "$PG_BODY" "$url"
+  PG_NEXT="$(tr -d '\r' < "$PG_HDR" | awk -F': ' 'tolower($1)=="x-nomad-nexttoken"{print $2}')"
+}
+
+cleanup_jobs_dir() { rm -rf "$HERE/jobs"; rm -f "$PG_BODY" "$PG_HDR" "$PG_IDS"; }
 teardown() { $DC down -v >/dev/null 2>&1; }
 
 # ---------------------------------------------------------------------------
@@ -230,7 +242,42 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-step "7. Cleanup"
+step "7. Full pagination walk (next_token cursor, like the web UI)"
+GMAX="$(q "v1/jobs?$NS" | jq -r '.[].ModifyIndex' | sort -n | uniq -c | awk '{print $1}' | sort -rn | head -1)"
+if [ -z "$SH" ] || [ "${GMAX:-1}" -lt 2 ]; then
+  warn "no shared-ModifyIndex group this run — skipping pagination walk."
+else
+  PER=$(( GMAX - 1 ))
+  info "paging /v1/jobs/statuses with per_page=$PER, following next_token to the end:"
+  echo
+  : > "$PG_IDS"
+  tok=""; page=0; PG_END=""
+  while :; do
+    page=$(( page + 1 ))
+    [ "$page" -gt 50 ] && { PG_END="cap"; break; }
+    fetch_page "$PER" "$tok"
+    cnt="$(jq -r '.[].ID' < "$PG_BODY" 2>/dev/null | tee -a "$PG_IDS" | wc -l | tr -d ' ')"
+    printf '    page %2d: %2d job(s)   next_token=%s\n' "$page" "$cnt" "${PG_NEXT:-<none>}"
+    [ -z "$PG_NEXT" ]       && { PG_END="ok";    break; }
+    [ "$PG_NEXT" = "$tok" ] && { PG_END="repeat"; break; }
+    tok="$PG_NEXT"
+  done
+  echo
+  DUPE="$(sort "$PG_IDS" | uniq -d | tr '\n' ' ')"
+  MISS="$(comm -23 <(q "v1/jobs?$NS" | jq -r '.[].ID' | sort) <(sort -u "$PG_IDS") | tr '\n' ' ')"
+  case "$PG_END" in
+    ok)     info "walk ended after $page page(s): server returned no next_token." ;;
+    repeat) printf '    \033[1;31mwalk could not finish\033[0m: page %s returned the same next_token (%s) as the one requested — it repeats forever.\n' "$page" "$tok" ;;
+    cap)    printf '    \033[1;31mwalk hit the 50-page safety cap\033[0m: cursor never terminated.\n' ;;
+  esac
+  [ -n "$DUPE" ] && printf '    \033[1;31mduplicated\033[0m (returned on more than one page): %s\n' "$DUPE" \
+                 || ok "duplicated: none"
+  [ -n "$MISS" ] && printf '    \033[1;31mnever returned\033[0m (in /v1/jobs but no page showed them): %s\n' "$MISS" \
+                 || ok "never returned: none"
+fi
+
+# ---------------------------------------------------------------------------
+step "8. Cleanup"
 if [ "$KEEP" = "1" ]; then
   info "leaving cluster up (--keep). API: $ADDR"
   info "tear down later with:  $DC down -v   (from $HERE)"
