@@ -1,0 +1,3 @@
+```release-note:bug
+ui: Fixed a bug where the jobs index page could show a job on more than one page, or fail to page past a group of jobs that share a ModifyIndex
+```
