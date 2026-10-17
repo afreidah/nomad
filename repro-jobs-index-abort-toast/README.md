@@ -1,9 +1,9 @@
 # Repro harness: jobs page "Error fetching jobs ... status undefined" toast
 
-The jobs index (`/ui/jobs`) shows a sticky "Error fetching jobs: The backend
-returned an error with status undefined while fetching jobs" toast during
-normal paging, filtering, and live updates, even though every request
-returns 200.
+The jobs index (`/ui/jobs`) shows a perpetually recurring "Error fetching 
+jobs: The backend returned an error with status undefined while fetching 
+jobs" toast during normal paging, filtering, and live updates, even though 
+every request returns 200.
 
 ## Cause
 
@@ -22,8 +22,10 @@ The fix (branch `fix-jobs-index-abort-toast`) checks the request's own
 ```sh
 cd repro-jobs-index-abort-toast
 ./ui-toast.sh --port 5646                # build both binaries, then test each
-SKIP_BUILD=1 ./ui-toast.sh --port 5646   # reuse $OUT/nomad-ui-base and $OUT/nomad-ui-fix
+./ui-toast.sh --port 5646   # reuse $OUT/nomad-ui-base and $OUT/nomad-ui-fix
 ```
+note: use SKIP_BUILD=1 if you are running it an additional time so you don't
+have to wait for it to build the binaries again.
 
 Options: `--count N` (jobs, default 30), `--rounds R` (page/filter passes,
 default 3), `--port P` (host API/UI port, default 4646), `--keep` (leave the
