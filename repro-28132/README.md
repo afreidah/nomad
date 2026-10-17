@@ -143,3 +143,80 @@ FIXED: jobs share a ModifyIndex yet ALL 20 appear in /v1/jobs/statuses
 Docker (with `docker compose`), Go (to build the binaries), `jq`, `curl`.
 
 [issue]: https://github.com/hashicorp/nomad/issues/28132
+
+---
+
+# UI: spurious "Error fetching jobs ... status undefined" toast
+
+A second, unrelated jobs page bug, reproduced with the same cluster.
+
+The jobs index aborts its in-flight blocking queries on every page change,
+filter change, and live update. When an abort lands after the 200 headers,
+during the body read, ember-data JSON-parses the rejected read and the
+controller receives a `SyntaxError` instead of an `AbortError`. The old
+`e.name !== 'AbortError'` guard misses it, so `notifyFetchError` shows a sticky
+"Error fetching jobs: The backend returned an error with status undefined"
+toast even though every request returned 200.
+
+The fix checks the request's own `AbortSignal.aborted` instead of the error
+name (branch `fix-jobs-index-abort-toast`).
+
+## TL;DR
+
+```sh
+cd repro-28132
+./ui-toast.sh --port 5646
+```
+
+Expected: the base binary prints **BUG PRESENT**, the fix binary prints
+**FIXED**, and the script exits 0. The first run builds two UI-embedded
+binaries and takes several minutes; `SKIP_BUILD=1` reuses them.
+
+## What it does
+
+1. Builds a nomad binary with the UI embedded for each ref (mirrors
+   `make dev-ui`) in throwaway worktrees.
+2. Runs each binary in the compose cluster and seeds 30 running service jobs
+   (3 pages of 10).
+3. Drives `/ui/jobs` in headless Chrome straight against the agent (no ember
+   dev proxy): Next, Next, Previous, First, Last, First, then a filter change,
+   for 3 rounds.
+4. Records every critical toast and every error the controller logs, then
+   prints a verdict.
+
+## Usage
+
+```sh
+./ui-toast.sh [--count N] [--rounds R] [--port P] [--keep]
+BASE_REF=origin/main FIX_REF=fix-jobs-index-abort-toast ./ui-toast.sh
+SKIP_BUILD=1 ./ui-toast.sh        # reuse $OUT/nomad-ui-base and $OUT/nomad-ui-fix
+```
+
+`CHROME` overrides the browser; `OUT` (default `/tmp`) sets where binaries and
+build logs go. `playwright-core` is installed on first run into `.ui-deps/`.
+
+## Expected output
+
+Base:
+
+```
+toasts shown: 3   logged fetch errors: 13
+    toast: Error fetching jobs The backend returned an error with status undefined while fetching jobs
+    13x error fetching job allocs: SyntaxError: Unexpected token 'A', "AbortError"... is not valid JSON
+BUG PRESENT: superseded queries raised the "status undefined" toast
+```
+
+Fix:
+
+```
+toasts shown: 0   logged fetch errors: 0
+FIXED: paging and filtering aborted queries without any error toast
+```
+
+The toast uses `preventDuplicates`, so one toast per page load can stand for
+many errors; each round reloads the page, hence one toast per round.
+
+## Additional requirements
+
+Node, pnpm, Chrome or Chromium, and `go-bindata-assetfs` (installed by
+`make bootstrap`).

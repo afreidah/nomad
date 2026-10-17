@@ -1,3 +1,4 @@
 # scratch written by run.sh at runtime
 nomad-bin
 jobs/
+.ui-deps/
