@@ -17,6 +17,19 @@ import JobModel from '../../models/job';
 const JOB_LIST_THROTTLE = 5000;
 const JOB_DETAILS_THROTTLE = 1000;
 
+/**
+ * A superseded query is aborted on every requery and page change. An abort
+ * before the response headers rejects with a DOMException named 'AbortError',
+ * but an abort during the body read is JSON-parsed by ember-data and surfaces
+ * as a SyntaxError. The request's own signal is the reliable source of truth.
+ * @param {Error} e
+ * @param {AbortController} abortController
+ * @returns {boolean}
+ */
+function isAbort(e, abortController) {
+  return abortController.signal.aborted || e?.name === 'AbortError';
+}
+
 export default class JobsIndexController extends Controller {
   @service router;
   @service system;
@@ -231,12 +244,13 @@ export default class JobsIndexController extends Controller {
 
   jobQuery(params) {
     this.watchList.jobsIndexIDsController.abort();
-    this.watchList.jobsIndexIDsController = new AbortController();
+    const abortController = new AbortController();
+    this.watchList.jobsIndexIDsController = abortController;
 
     return this.store
       .query('job', params, {
         adapterOptions: {
-          abortController: this.watchList.jobsIndexIDsController,
+          abortController,
         },
       })
       .then((jobs) => {
@@ -244,7 +258,7 @@ export default class JobsIndexController extends Controller {
         return jobs;
       })
       .catch((e) => {
-        if (e.name !== 'AbortError') {
+        if (!isAbort(e, abortController)) {
           console.log('error fetching job ids', e);
           this.notifyFetchError(e);
         }
@@ -257,17 +271,18 @@ export default class JobsIndexController extends Controller {
 
   jobAllocsQuery(params) {
     this.watchList.jobsIndexDetailsController.abort();
-    this.watchList.jobsIndexDetailsController = new AbortController();
+    const abortController = new AbortController();
+    this.watchList.jobsIndexDetailsController = abortController;
     params.namespace = '*';
     return this.store
       .query('job', params, {
         adapterOptions: {
           method: 'POST',
-          abortController: this.watchList.jobsIndexDetailsController,
+          abortController,
         },
       })
       .catch((e) => {
-        if (e.name !== 'AbortError') {
+        if (!isAbort(e, abortController)) {
           console.log('error fetching job allocs', e);
           this.notifyFetchError(e);
         }
