@@ -1,0 +1,3 @@
+```release-note:bug
+ui: Fixed a bug where the jobs list page showed an "Error fetching jobs" notification with status undefined when paging, filtering, or refreshing cancelled an in-flight request
+```

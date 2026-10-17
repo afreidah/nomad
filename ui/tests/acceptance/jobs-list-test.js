@@ -301,6 +301,115 @@ module('Acceptance | jobs list', function (hooks) {
       .doesNotExist('Cache warning removed when fetching is restarted');
   });
 
+  // Superseded blocking queries are often aborted after their 200 headers
+  // arrive, so the abort lands on the body read. ember-data then tries to
+  // JSON.parse the rejection and hands back a SyntaxError, not an AbortError.
+  // Stub only the next /v1/jobs/statuses request for the given method, then
+  // restore the real fetch so follow-up queries are served by mirage.
+  // `failBody` fails the body read on its own, without any abort. Resolves
+  // `readingBody` once ember-data starts reading the 200 response body, so a
+  // test can abort mid-read exactly as a superseded blocking query does.
+  function stubStatusesBodyRead(adapter, method, { failBody = false } = {}) {
+    let markReadingBody;
+    const readingBody = new Promise((resolve) => (markReadingBody = resolve));
+    const fetchRequest = adapter._fetchRequest;
+    adapter._fetchRequest = function (options) {
+      if (
+        !options.url.includes('/v1/jobs/statuses') ||
+        options.method !== method
+      ) {
+        return fetchRequest.call(this, options);
+      }
+      adapter._fetchRequest = fetchRequest;
+      const { signal } = options;
+      const aborted = () =>
+        new DOMException('The user aborted a request.', 'AbortError');
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: new Headers(),
+        text: () =>
+          new Promise((resolve, reject) => {
+            markReadingBody();
+            if (failBody) {
+              reject(new TypeError('network error'));
+            } else if (signal.aborted) {
+              // Matches real fetch: reading the body after an abort rejects.
+              reject(aborted());
+            } else {
+              signal.addEventListener('abort', () => reject(aborted()));
+            }
+          }),
+      });
+    };
+    return readingBody;
+  }
+
+  test('aborting an in-flight job IDs query does not show an error toast', async function (assert) {
+    this.server.createList('job', 3, { createAllocations: false });
+    await JobsList.visit();
+
+    const controller = this.owner.lookup('controller:jobs.index');
+    const readingBody = stubStatusesBodyRead(
+      this.owner.lookup('service:store').adapterFor('job'),
+      'GET',
+    );
+
+    const query = controller.jobQuery({ per_page: 10 });
+    await readingBody;
+    controller.watchList.jobsIndexIDsController.abort();
+    await query;
+    await settled();
+
+    assert
+      .dom('.flash-message.alert-critical')
+      .doesNotExist('A superseded job IDs query is not reported as an error');
+  });
+
+  test('aborting an in-flight job details query does not show an error toast', async function (assert) {
+    this.server.createList('job', 3, { createAllocations: false });
+    await JobsList.visit();
+
+    const controller = this.owner.lookup('controller:jobs.index');
+    const readingBody = stubStatusesBodyRead(
+      this.owner.lookup('service:store').adapterFor('job'),
+      'POST',
+    );
+
+    const query = controller.jobAllocsQuery({ jobs: controller.jobIDs });
+    await readingBody;
+    controller.watchList.jobsIndexDetailsController.abort();
+    await query;
+    await settled();
+
+    assert
+      .dom('.flash-message.alert-critical')
+      .doesNotExist(
+        'A superseded job details query is not reported as an error',
+      );
+  });
+
+  test('a failed body read that was not aborted still shows an error toast', async function (assert) {
+    this.server.createList('job', 3, { createAllocations: false });
+    await JobsList.visit();
+
+    const controller = this.owner.lookup('controller:jobs.index');
+    const readingBody = stubStatusesBodyRead(
+      this.owner.lookup('service:store').adapterFor('job'),
+      'GET',
+      { failBody: true },
+    );
+
+    await controller.jobQuery({ per_page: 10 });
+    await readingBody;
+    await settled();
+
+    assert
+      .dom('.flash-message.alert-critical')
+      .exists('A genuine fetch failure is still reported');
+  });
+
   function typeForJob(job) {
     return job.periodic
       ? 'periodic'
