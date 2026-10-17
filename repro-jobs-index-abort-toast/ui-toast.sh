@@ -26,7 +26,8 @@
 #
 set -u
 
-# Hard isolation from any real cluster (see run.sh).
+# Hard isolation from any real cluster: drop inherited NOMAD_* vars; a leader
+# guard below refuses to continue unless the cluster is on a docker subnet.
 unset NOMAD_ADDR NOMAD_TOKEN NOMAD_CLIENT_CERT NOMAD_CLIENT_KEY NOMAD_CACERT \
       NOMAD_NAMESPACE NOMAD_REGION NOMAD_TLS_SERVER_NAME 2>/dev/null || true
 
