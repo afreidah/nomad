@@ -1,0 +1,23 @@
+# Disposable single-server Nomad for reproducing hashicorp/nomad#28211
+# (Namespace+ID pagination across namespaces like "team" and "team-a").
+#
+# The nomad binary under test is bind-mounted from ./nomad-bin; ab.sh copies
+# each binary it tests into that path before bringing the stack up. No client
+# is needed: jobs only have to be registered to show up in /v1/jobs.
+name: nomad-nsid-repro
+
+services:
+  server:
+    image: alpine:3.20
+    container_name: nnsr-server
+    hostname: server
+    command: ["/nomad", "agent", "-config=/etc/nomad/server.hcl"]
+    volumes:
+      - ./nomad-bin:/nomad:ro
+      - ./conf/server.hcl:/etc/nomad/server.hcl:ro
+      - server-data:/data
+    ports:
+      - "${HOST_PORT:-4646}:4646"
+
+volumes:
+  server-data:
